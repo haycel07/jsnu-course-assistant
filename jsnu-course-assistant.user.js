@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         江苏师大实验室课程：言溪题库自动答题 + 视频自动下一节
 // @namespace    local.jsnu.question-bank
-// @version      1.5.2
+// @version      1.5.3
 // @description  左上角统一面板，可选倍速、视频习题与题库试卷逐题作答、末题提交。
 // @match        http://lsoetp.jsnu.edu.cn/students/*
 // @match        https://lsoetp.jsnu.edu.cn/students/*
@@ -342,6 +342,15 @@ function createNextVideo(env, options) {
       const byText = question.options.filter(o => normalize(o.text) === n);
       if (byText.length === 1) return byText[0].letter;
       if (byText.length > 1) throw new Error('多个选项文字相同，无法确定答案');
+      // AI may omit a sentence-final full stop while retaining the exact option body.
+      // Keep internal punctuation and explicit letter-answer syntax unchanged.
+      if (!/^[（(]?[A-D][)）.、:：]?$/i.test(clean)) {
+        const withoutFinalStop = value => normalize(value).replace(/[。.]+$/, '');
+        const body = withoutFinalStop(clean);
+        const byFinalStop = body ? question.options.filter(o => withoutFinalStop(o.text) === body) : [];
+        if (byFinalStop.length === 1) return byFinalStop[0].letter;
+        if (byFinalStop.length > 1) throw new Error('忽略末尾句号后多个选项相同，无法确定答案');
+      }
       if (question.type === 'judgement' && truth(clean) !== null) {
         const matching = question.options.filter(o => truth(o.text) === truth(clean));
         if (matching.length === 1) return matching[0].letter;
@@ -580,7 +589,7 @@ function createNextVideo(env, options) {
     style.textContent=':host{font:13px/1.6 system-ui,sans-serif;color:#173540}*{box-sizing:border-box}[hidden]{display:none!important}.box{padding:12px;background:#f5fffc;border:1px solid #8ab9a8;border-radius:9px;box-shadow:0 3px 14px #0002;max-height:calc(100vh - 32px);overflow:auto}header{display:flex;justify-content:space-between;align-items:center;gap:8px}h4{margin:0}button,select{padding:4px 7px;margin:5px 4px 0 0;background:white;border:1px solid #89a99e;border-radius:5px;color:inherit;cursor:pointer}header button{margin:0}input{width:100%;margin-top:7px;padding:7px;border:1px solid #aaa;border-radius:4px}small{display:block;color:#51675e}.status{margin:6px 0;overflow-wrap:anywhere}.row{margin-top:7px;padding-top:6px;border-top:1px solid #d6e8e0}label{margin-right:7px}';
     const make=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
     const box=make('section');box.className='box';
-    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.2'),fold=make('button','收起');
+    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.3'),fold=make('button','收起');
     fold.type='button';header.append(title,fold);
     const body=make('div');
     fold.onclick=()=>{body.hidden=!body.hidden;fold.textContent=body.hidden?'展开':'收起';};
@@ -623,7 +632,7 @@ function createNextVideo(env, options) {
     questionApp=questionApi.createApp({window,document,transport:questionApi.createTransport(GM_xmlhttpRequest),
       getToken:()=>GM_getValue('enncy-token',''),saveToken:value=>GM_setValue('enncy-token',value),onStatus:panel.setQuiz},{ui:false});
     const dispose=()=>{videoApp.stop();questionApp.stop();panel.destroy();window.removeEventListener('pagehide',dispose);};
-    window[slot]={version:'1.5.2',dispose};window.addEventListener('pagehide',dispose);
+    window[slot]={version:'1.5.3',dispose};window.addEventListener('pagehide',dispose);
     videoApp.start();questionApp.start();
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "jsnu-course-assistant",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "description": "JSNU laboratory course userscript with configurable speed and question-bank assistance",
   "engines": { "node": ">=20" },

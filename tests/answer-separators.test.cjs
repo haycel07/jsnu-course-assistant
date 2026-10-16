@@ -25,3 +25,23 @@ test('ambiguous or altered option text remains rejected',()=>{
  assert.throws(()=>resolveAnswer({...q,type:'single'},reply('A#C')));
  const duplicated={...q,options:[q.options[0],{letter:'B',text:q.options[0].text}]};assert.throws(()=>resolveAnswer(duplicated,reply(q.options[0].text)),/相同/);
 });
+
+test('AI may omit sentence-final full stops from hash-separated full answer texts',()=>{
+ const raw=q.options.map(o=>o.text.replace(/。$/,'')).join('#');assert.deepEqual(resolveAnswer(q,reply(raw)).letters,['A','B','C','D']);
+});
+test('full-width and ASCII final stops are compatible while exact text is preferred',()=>{
+ const question={...q,type:'single',options:[{letter:'A',text:'同一正文。'},{letter:'B',text:'同一正文'}]};
+ assert.deepEqual(resolveAnswer(question,reply('同一正文')).letters,['B']);
+ const unique={...q,type:'single',options:[{letter:'A',text:'独特正文．'},{letter:'B',text:'其他内容。'}]};assert.deepEqual(resolveAnswer(unique,reply('独特正文.')).letters,['A']);
+});
+test('terminal punctuation compatibility rejects ambiguous options',()=>{
+ const question={...q,type:'single',options:[{letter:'A',text:'重复正文。'},{letter:'B',text:'重复正文..'}]};assert.throws(()=>resolveAnswer(question,reply('重复正文')),/多个选项/);
+});
+test('decimal points, minus signs, internal punctuation and words are not discarded',()=>{
+ const question={...q,type:'single',options:[{letter:'A',text:'数值1.0，且不低于-2。'},{letter:'B',text:'其他内容。'}]};
+ for(const value of ['数值10，且不低于-2','数值1.0，且不低于2','数值1.0且不低于-2','数值1.0，且低于-2'])assert.throws(()=>resolveAnswer(question,reply(value)));
+ assert.deepEqual(resolveAnswer(question,reply('数值1.0，且不低于-2')).letters,['A']);
+});
+test('letter answer punctuation is not reinterpreted as another option literal',()=>{
+ const question={...q,type:'single',options:[{letter:'A',text:'其他'},{letter:'B',text:'目标'},{letter:'C',text:'B'}]};assert.deepEqual(resolveAnswer(question,reply('B.')).letters,['B']);
+});
