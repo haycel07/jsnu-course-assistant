@@ -18,6 +18,7 @@ test('selected playback speed applies immediately and survives same-element sour
 function setup(options = {}) {
   let clock = 0;
   const handlers = new Map();
+  const inputHandlers = new Map();
   const calls = [];
   const media = {
     parentElement: null, src: 'a.mp4', currentSrc: 'a.mp4', currentTime: 0, duration: 10,
@@ -42,7 +43,9 @@ function setup(options = {}) {
     timers: 0, setInterval() { this.timers++; return 1; }, clearInterval() { this.timers--; },
     addEventListener() {}, removeEventListener() {}
   };
-  const doc = { hidden: false, querySelector: () => media };
+  const doc = { hidden: false, querySelector: () => media,
+    addEventListener(type,fn){inputHandlers.set(type,fn);},
+    removeEventListener(type,fn){if(inputHandlers.get(type)===fn)inputHandlers.delete(type);}};
   const app = create({ window: win, document: doc, now: () => clock, getSpeed: options.getSpeed },
     { ui: false, graceMs: 100, loadTimeoutMs: 500 });
   app.start();
@@ -55,7 +58,7 @@ function setup(options = {}) {
     vm.model.id = id; vm.model.questionRelaList = []; media.src = 'b.mp4'; media.currentSrc = 'b.mp4';
     media.ended = false; media.currentTime = 0;
   }
-  return { media, vm, doc, win, app, calls, handlers, end, tick, loaded };
+  return { media, vm, doc, win, app, calls, handlers, inputHandlers, end, tick, loaded };
 }
 
 test('natural end selects next via the native contract exactly once, retaining long string IDs', async () => {
@@ -116,7 +119,7 @@ test('route leave clears listeners and pending navigation; reentry rebinds once'
   const s = setup(); s.end(); s.win.location.pathname = '/students/myCourse'; s.tick();
   assert.equal(s.handlers.size, 0); assert.equal(s.calls.length, 0);
   s.win.location.pathname = '/students/courseDetail'; s.tick();
-  assert.equal(s.handlers.size, 1); s.end(); s.tick(); assert.equal(s.calls.length, 1);
+  assert.equal(s.handlers.size, 3); s.end(); s.tick(); assert.equal(s.calls.length, 1);
 });
 test('other hosts are not activated', () => {
   const s = setup(); s.win.location.hostname = 'example.com'; s.tick();
@@ -147,3 +150,35 @@ test('media readiness alone does not start playback before the next question lis
   assert.equal(s.media.plays, 1);
 });
 
+
+function playbackStarted(s){s.media.paused=false;s.handlers.get('playing')({target:s.media});}
+function playbackPaused(s){s.media.paused=true;s.handlers.get('pause')({target:s.media});}
+const settled=async()=>{await Promise.resolve();await Promise.resolve();};
+test('non-user pause of previously playing video resumes once after grace',async()=>{
+ const s=setup();playbackStarted(s);playbackPaused(s);s.tick(1000);assert.equal(s.media.plays,0);
+ s.media.play=()=>{s.media.plays++;s.media.paused=false;return Promise.resolve();};s.tick(600);await settled();
+ assert.equal(s.media.plays,1);assert.match(s.app.getState().status,/已恢复播放/);s.tick(5000);assert.equal(s.media.plays,1);s.app.stop();
+});
+test('trusted pointer pause remains paused until a later manual play',async()=>{
+ const s=setup();playbackStarted(s);s.inputHandlers.get('pointerdown')({type:'pointerdown',isTrusted:true,target:s.media});playbackPaused(s);s.tick(5000);assert.equal(s.media.plays,0);
+ playbackStarted(s);playbackPaused(s);s.media.play=()=>{s.media.plays++;s.media.paused=false;return Promise.resolve();};s.tick(1600);await settled();assert.equal(s.media.plays,1);s.app.stop();
+});
+test('keyboard pause and media pause keys are preserved',()=>{
+ for(const key of [' ','k','Enter','MediaPlayPause','MediaPause']){const s=setup();playbackStarted(s);s.inputHandlers.get('keydown')({type:'keydown',key,isTrusted:true,target:{tagName:'VIDEO'}});playbackPaused(s);s.tick(5000);assert.equal(s.media.plays,0);s.app.stop();}
+});
+test('typing and untrusted input do not masquerade as manual media pause',async()=>{
+ for(const input of [{type:'keydown',key:' ',isTrusted:true,target:{tagName:'INPUT'}},{type:'pointerdown',isTrusted:false}]){const s=setup();playbackStarted(s);s.inputHandlers.get(input.type)({...input,target:input.target||s.media});playbackPaused(s);s.media.play=()=>{s.media.plays++;s.media.paused=false;return Promise.resolve();};s.tick(1600);await settled();assert.equal(s.media.plays,1);s.app.stop();}
+});
+test('quiz and hidden page defer recovery until both blockers clear',async()=>{
+ const s=setup();playbackStarted(s);playbackPaused(s);s.vm.showModal=true;s.tick(2000);assert.equal(s.media.plays,0);s.vm.showModal=false;s.doc.hidden=true;s.tick(2000);assert.equal(s.media.plays,0);
+ s.doc.hidden=false;s.media.play=()=>{s.media.plays++;s.media.paused=false;return Promise.resolve();};s.tick();await settled();assert.equal(s.media.plays,1);s.app.stop();
+});
+test('initially paused, ended, seeking, errored and disabled video are not resumed',()=>{
+ for(const mode of ['initial','ended','seeking','error','disabled','loading']){const s=setup();if(mode!=='initial')playbackStarted(s);playbackPaused(s);if(mode==='ended')s.media.ended=true;if(mode==='seeking')s.media.seeking=true;if(mode==='error')s.media.error={};if(mode==='disabled')s.app.setEnabled(false);if(mode==='loading')s.media.readyState=1;s.tick(5000);assert.equal(s.media.plays,0);s.app.stop();}
+});
+test('resume rejection does not loop and stop removes input listeners',async()=>{
+ const s=setup({play:()=>Promise.reject(new Error('blocked'))});playbackStarted(s);playbackPaused(s);s.tick(1600);await settled();s.tick(5000);assert.equal(s.media.plays,1);assert.match(s.app.getState().status,/手动点击播放/);s.app.stop();assert.equal(s.inputHandlers.size,0);assert.equal(s.handlers.size,0);
+});
+test('same-element source replacement cancels old recovery and late promise status',async()=>{
+ let finish;const s=setup({play:()=>new Promise(resolve=>finish=resolve)});playbackStarted(s);playbackPaused(s);s.tick(1600);assert.equal(s.media.plays,1);s.loaded();s.tick(2000);const status=s.app.getState().status;finish();await settled();assert.equal(s.app.getState().status,status);assert.equal(s.media.plays,1);s.app.stop();
+});

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         江苏师大实验室课程：言溪题库自动答题 + 视频自动下一节
 // @namespace    local.jsnu.question-bank
-// @version      1.5.5
+// @version      1.5.6
 // @description  左上角统一面板，可选倍速、视频习题与题库试卷逐题作答、末题提交。
 // @match        http://lsoetp.jsnu.edu.cn/students/*
 // @match        https://lsoetp.jsnu.edu.cn/students/*
@@ -20,7 +20,7 @@ function createNextVideo(env, options) {
   const win = env.window;
   const doc = env.document;
   const now = env.now || Date.now;
-  const config = { pollMs: 400, graceMs: 1500, loadTimeoutMs: 15000, ui: true, ...options };
+  const config = { pollMs: 400, graceMs: 1500, loadTimeoutMs: 15000, resumeDelayMs: 1500, ui: true, ...options };
   let running = false;
   let enabled = true;
   let interval = null;
@@ -30,6 +30,68 @@ function createNextVideo(env, options) {
   let host = null;
   let label = null;
   let toggle = null;
+  let playback = null;
+
+  function trackPlayback() {
+    const key = video ? JSON.stringify([source(video), String(owner(video)?.model?.id)]) : null;
+    if (!playback || playback.key !== key) playback = { key, wasPlaying: false,
+      manual: false, userUntil: -Infinity, pausedAt: null, pending: false, blocked: false };
+    return playback;
+  }
+
+  function userInput(event) {
+    if (!video || event.isTrusted !== true || video.paused !== false) return;
+    const target = event.target;
+    if (event.type === 'pointerdown') {
+      const control = target === video || (video.parentElement?.contains?.(target) &&
+        target?.closest?.('button,[role="button"]'));
+      if (!control) return;
+    } else {
+      if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '')) return;
+      if (![' ', 'Spacebar', 'k', 'K', 'Enter', 'MediaPlayPause', 'MediaPause'].includes(event.key)) return;
+    }
+    trackPlayback().userUntil = now() + 2000;
+  }
+
+  function playing() {
+    const state = trackPlayback();
+    state.wasPlaying = true; state.manual = false; state.userUntil = -Infinity;
+    state.pausedAt = null; state.blocked = false;
+  }
+
+  function paused() {
+    const state = trackPlayback();
+    if (now() <= state.userUntil) { state.manual = true; setStatus('检测到手动暂停，等待你点击播放'); }
+    state.pausedAt = now();
+  }
+
+  function resumePlayback() {
+    const state = trackPlayback();
+    if (video.paused === false) { state.wasPlaying = true; state.pausedAt = null; return; }
+    if (!enabled || job || !state.wasPlaying || state.manual || state.blocked || state.pending ||
+        video.paused !== true || video.ended || video.seeking || video.error ||
+        video.readyState < 2 || doc.hidden || owner(video)?.showModal !== false) return;
+    if (now() <= state.userUntil) { state.manual = true; return; }
+    if (state.pausedAt === null) state.pausedAt = now();
+    if (now() - state.pausedAt < config.resumeDelayMs) return;
+    state.pending = true;
+    const target = video;
+    const stillCurrent = () => running && inCourse() && video === target && trackPlayback() === state;
+    const rejected = () => {
+      if (!stillCurrent()) return;
+      state.pending = false; state.blocked = true;
+      setStatus('恢复播放未成功，请手动点击播放');
+    };
+    setStatus('检测到非手动暂停，正在恢复播放');
+    try {
+      Promise.resolve(target.play()).then(() => {
+        if (!stillCurrent()) return;
+        state.pending = false;
+        if (target.paused !== false) return rejected();
+        setStatus('已恢复播放，等待本节结束');
+      }, rejected);
+    } catch (_) { rejected(); }
+  }
 
   function inCourse() {
     return win.location.hostname === 'lsoetp.jsnu.edu.cn' &&
@@ -94,8 +156,11 @@ function createNextVideo(env, options) {
 
   function unbind() {
     video?.removeEventListener('ended', ended);
+    video?.removeEventListener('playing', playing);
+    video?.removeEventListener('pause', paused);
     video = null;
     job = null;
+    playback = null;
   }
 
   function step() {
@@ -113,11 +178,14 @@ function createNextVideo(env, options) {
       unbind();
       video = current;
       video?.addEventListener('ended', ended);
+      video?.addEventListener('playing', playing);
+      video?.addEventListener('pause', paused);
       setStatus(video ? '等待视频自然结束' : '等待课程视频加载');
     }
     // Reapply after media loads or a same-element source change.
     // Leave seeking, course progress and quiz handling to the website.
     if (video) {
+      resumePlayback();
       try {
         const rate = Number(env.getSpeed?.() ?? 10);
         if (video.defaultPlaybackRate !== rate) video.defaultPlaybackRate = rate;
@@ -204,6 +272,8 @@ function createNextVideo(env, options) {
     if (running) return;
     running = true;
     win.addEventListener('pagehide', stop);
+    doc.addEventListener?.('pointerdown', userInput, true);
+    doc.addEventListener?.('keydown', userInput, true);
     interval = win.setInterval(step, config.pollMs);
     step();
   }
@@ -213,6 +283,8 @@ function createNextVideo(env, options) {
     win.clearInterval(interval);
     interval = null;
     win.removeEventListener('pagehide', stop);
+    doc.removeEventListener?.('pointerdown', userInput, true);
+    doc.removeEventListener?.('keydown', userInput, true);
     unbind();
     host?.remove();
     host = label = toggle = null;
@@ -607,7 +679,7 @@ function createNextVideo(env, options) {
     style.textContent=':host{font:13px/1.6 system-ui,sans-serif;color:#173540}*{box-sizing:border-box}[hidden]{display:none!important}.box{padding:12px;background:#f5fffc;border:1px solid #8ab9a8;border-radius:9px;box-shadow:0 3px 14px #0002;max-height:calc(100vh - 32px);overflow:auto}header{display:flex;justify-content:space-between;align-items:center;gap:8px}h4{margin:0}button,select{padding:4px 7px;margin:5px 4px 0 0;background:white;border:1px solid #89a99e;border-radius:5px;color:inherit;cursor:pointer}header button{margin:0}input{width:100%;margin-top:7px;padding:7px;border:1px solid #aaa;border-radius:4px}small{display:block;color:#51675e}.status{margin:6px 0;overflow-wrap:anywhere}.row{margin-top:7px;padding-top:6px;border-top:1px solid #d6e8e0}label{margin-right:7px}';
     const make=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
     const box=make('section');box.className='box';
-    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.5'),fold=make('button','收起');
+    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.6'),fold=make('button','收起');
     fold.type='button';header.append(title,fold);
     const body=make('div');
     fold.onclick=()=>{body.hidden=!body.hidden;fold.textContent=body.hidden?'展开':'收起';};
@@ -650,7 +722,7 @@ function createNextVideo(env, options) {
     questionApp=questionApi.createApp({window,document,transport:questionApi.createTransport(GM_xmlhttpRequest),
       getToken:()=>GM_getValue('enncy-token',''),saveToken:value=>GM_setValue('enncy-token',value),onStatus:panel.setQuiz},{ui:false});
     const dispose=()=>{videoApp.stop();questionApp.stop();panel.destroy();window.removeEventListener('pagehide',dispose);};
-    window[slot]={version:'1.5.5',dispose};window.addEventListener('pagehide',dispose);
+    window[slot]={version:'1.5.6',dispose};window.addEventListener('pagehide',dispose);
     videoApp.start();questionApp.start();
   }
 
