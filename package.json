@@ -1,0 +1,11 @@
+{
+  "name": "jsnu-course-assistant",
+  "version": "1.5.0",
+  "private": true,
+  "description": "JSNU laboratory course userscript with configurable speed and question-bank assistance",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "check": "node --check jsnu-course-assistant.user.js",
+    "test": "node --test tests/next-video.test.cjs tests/question-bank.test.cjs tests/v1.3-regression.test.cjs tests/question-list.test.cjs tests/ai-fallback.test.cjs"
+  }
+}
