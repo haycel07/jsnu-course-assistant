@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         江苏师大实验室课程：言溪题库自动答题 + 视频自动下一节
 // @namespace    local.jsnu.question-bank
-// @version      1.5.0
+// @version      1.5.1
 // @description  左上角统一面板，可选倍速、视频习题与题库试卷逐题作答、末题提交。
 // @match        http://lsoetp.jsnu.edu.cn/students/*
 // @match        https://lsoetp.jsnu.edu.cn/students/*
@@ -357,10 +357,19 @@ function createNextVideo(env, options) {
       try { letters.push(one(value)); }
       catch (wholeError) {
         const cleaned = String(value).trim().replace(/^(?:答案|正确答案)\s*[:：]\s*/, '');
-        let parts = cleaned.split(/(?:#{1,3}|\|\||\r?\n|[、；;])/).map(s => s.trim()).filter(Boolean);
-        if (parts.length === 1 && /^(?:[A-D][,，\s]*){2,}$/i.test(cleaned)) parts = cleaned.toUpperCase().match(/[A-D]/g);
-        if (parts.length < 2) throw wholeError;
-        letters.push(...parts.map(one));
+        // A full option may itself contain enumeration punctuation or newlines.
+        // Try structural answer separators first, preserving punctuation inside each option.
+        let mapped = null;
+        for (const separator of [/#{1,}/, /\|\|/, /\r?\n/, /[、；;]/]) {
+          const parts = cleaned.split(separator).map(s => s.trim()).filter(Boolean);
+          if (parts.length < 2) continue;
+          try { mapped = parts.map(one); break; } catch (_) { /* Try the next format. */ }
+        }
+        if (!mapped && /^(?:[A-D][,，\s]*){2,}$/i.test(cleaned)) {
+          mapped = cleaned.toUpperCase().match(/[A-D]/g).map(one);
+        }
+        if (!mapped) throw wholeError;
+        letters.push(...mapped);
       }
     }
     const unique = Array.from(new Set(letters)).sort();
@@ -571,7 +580,7 @@ function createNextVideo(env, options) {
     style.textContent=':host{font:13px/1.6 system-ui,sans-serif;color:#173540}*{box-sizing:border-box}[hidden]{display:none!important}.box{padding:12px;background:#f5fffc;border:1px solid #8ab9a8;border-radius:9px;box-shadow:0 3px 14px #0002;max-height:calc(100vh - 32px);overflow:auto}header{display:flex;justify-content:space-between;align-items:center;gap:8px}h4{margin:0}button,select{padding:4px 7px;margin:5px 4px 0 0;background:white;border:1px solid #89a99e;border-radius:5px;color:inherit;cursor:pointer}header button{margin:0}input{width:100%;margin-top:7px;padding:7px;border:1px solid #aaa;border-radius:4px}small{display:block;color:#51675e}.status{margin:6px 0;overflow-wrap:anywhere}.row{margin-top:7px;padding-top:6px;border-top:1px solid #d6e8e0}label{margin-right:7px}';
     const make=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
     const box=make('section');box.className='box';
-    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.0'),fold=make('button','收起');
+    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.1'),fold=make('button','收起');
     fold.type='button';header.append(title,fold);
     const body=make('div');
     fold.onclick=()=>{body.hidden=!body.hidden;fold.textContent=body.hidden?'展开':'收起';};
@@ -614,7 +623,7 @@ function createNextVideo(env, options) {
     questionApp=questionApi.createApp({window,document,transport:questionApi.createTransport(GM_xmlhttpRequest),
       getToken:()=>GM_getValue('enncy-token',''),saveToken:value=>GM_setValue('enncy-token',value),onStatus:panel.setQuiz},{ui:false});
     const dispose=()=>{videoApp.stop();questionApp.stop();panel.destroy();window.removeEventListener('pagehide',dispose);};
-    window[slot]={version:'1.5.0',dispose};window.addEventListener('pagehide',dispose);
+    window[slot]={version:'1.5.1',dispose};window.addEventListener('pagehide',dispose);
     videoApp.start();questionApp.start();
   }
 
