@@ -26,7 +26,7 @@ function controller({start=1,total=3,unansweredBefore=false,existing=[]}={}){
  let clock=0,active,requests=0,nexts=0,submits=0,confirms=0,confirmation=false;
  const root={};const selectedAnswers=new Map();
  function setQuestion(index){
-  active={mode:'paper',root,key:'paper'+index,index,total,title:'题干'+index,type:'multiple',unanswered:[],options:['A','B','C'].map(letter=>({letter,text:letter,input:{checked:existing.includes(letter),disabled:false,click(){this.checked=true;}}}))};
+  active={mode:'paper',root,key:'paper'+index,index,total,title:'题干'+index,type:'multiple',unanswered:[],options:['A','B','C'].map(letter=>({letter,text:letter,input:{checked:existing.includes(letter),disabled:false,click(){this.checked=!this.checked;}}}))};
   active.next=index<total?{disabled:false}:null;
   active.submit={disabled:false,click(){
    selectedAnswers.set(index,active.options.filter(o=>o.input.checked).map(o=>o.letter));
@@ -52,8 +52,8 @@ test('last question never submits with earlier unanswered questions',async()=>{
 test('preselected subset is preserved and completed before next action',async()=>{
  const c=controller({start:3,existing:['A']});for(let i=0;i<15;i++)await c.step();assert.deepEqual(c.selectedAnswers.get(3),['A','C']);assert.equal(c.stats().confirms,1);c.app.stop();
 });
-test('conflicting existing answer is not overwritten or submitted',async()=>{
- const c=controller({start:3,existing:['B']});for(let i=0;i<15;i++)await c.step();assert.equal(c.stats().submits,0);assert.match(c.app.getState().status,/已有选择/);c.app.stop();
+test('conflicting preselected answer is reconciled before submission',async()=>{
+ const c=controller({start:3,existing:['B']});for(let i=0;i<15;i++)await c.step();assert.equal(c.stats().submits,1);assert.deepEqual(c.selectedAnswers.get(3),['A','C']);c.app.stop();
 });
 test('submit confirmation reader only accepts explicit paper submission dialog',()=>{
  const button=visible({textContent:'确 定'});const root=visible({querySelector:s=>({textContent:s.includes('title')?'是否提交':'确认提交试卷?'}),querySelectorAll:()=>[button]});assert.equal(readSubmitConfirmation({querySelectorAll:()=>[root]}),button);

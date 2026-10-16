@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         江苏师大实验室课程：言溪题库自动答题 + 视频自动下一节
 // @namespace    local.jsnu.question-bank
-// @version      1.5.1
+// @version      1.5.2
 // @description  左上角统一面板，可选倍速、视频习题与题库试卷逐题作答、末题提交。
 // @match        http://lsoetp.jsnu.edu.cn/students/*
 // @match        https://lsoetp.jsnu.edu.cn/students/*
@@ -475,23 +475,26 @@ function createNextVideo(env, options) {
           if(now()>=task.deadline)return halt('多选状态未稳定，请手动检查；不会提交不完整答案');
           if(doc.hidden)return;
           const actual=selected(q);
-          if(task.pendingLetter){
-            const expected=[...task.confirmed,task.pendingLetter].sort();
+          if(task.pendingSelection){
+            const expected=task.pendingSelection.after;
             if(JSON.stringify(actual)!==JSON.stringify(expected)){
               // Allow the controlled checkbox component to finish its render.
-              if(JSON.stringify(actual)===JSON.stringify(task.confirmed))return;
+              if(JSON.stringify(actual)===JSON.stringify(task.pendingSelection.before))return;
               return halt('选中状态与预期不符，已停止自动提交');
             }
-            task.confirmed=expected;task.pendingLetter=null;
+            task.confirmed=expected;task.pendingSelection=null;
           }
           if(JSON.stringify(actual)!==JSON.stringify(task.confirmed))return halt('检测到选择状态变化，请手动确认');
-          const next=task.letters.find(letter=>!task.confirmed.includes(letter));
+          const extra=q.type==='multiple'?task.confirmed.find(letter=>!task.letters.includes(letter)):null;
+          const next=extra||task.letters.find(letter=>!task.confirmed.includes(letter));
           if(next){
             const option=q.options.find(o=>o.letter===next);
             if(!option||option.input.disabled)return;
-            task.pendingLetter=next;
+            const after=q.type!=='multiple'?[next]:extra?
+              task.confirmed.filter(letter=>letter!==next):[...task.confirmed,next].sort();
+            task.pendingSelection={before:[...task.confirmed],after};
             try{option.input.click();}catch(_){return halt('选项无法点击，请手动处理');}
-            say('逐项选择答案 '+task.letters.join('、')+'（已确认 '+task.confirmed.length+'/'+task.letters.length+'）');
+            say(extra?'正在取消残留选项 '+extra:'正在核对并选择答案 '+task.letters.join('、'));
             return;
           }
           task.phase='filled';task.readyAt=now()+config.fillDelayMs;
@@ -523,7 +526,6 @@ function createNextVideo(env, options) {
       if(handled||doc.hidden)return;
       const token=env.getToken?.();
       if(!token){say('请先保存言溪题库令牌');return;}
-      if(q.mode!=='paper'&&selected(q).length){handled=true;say('检测到已有选择，保留你的答案，请手动提交');return;}
       if(q.options.some(o=>o.input.disabled)){say('选项暂不可用，等待页面就绪');return;}
       if(now()-lastRequestAt<1500)return;
       handled=true;
@@ -538,7 +540,6 @@ function createNextVideo(env, options) {
           let latest=current(t);if(!latest)return;
           if(doc.hidden)return halt('页面在后台，已停止填答；返回后可重试');
           if(JSON.stringify(selected(latest))!==JSON.stringify(t.initialSelection))return halt('检测到手动选择，未覆盖你的答案');
-          if(latest.mode!=='paper'&&selected(latest).length)return halt('检测到手动选择，未覆盖你的答案');
           let result,fromAI=false;
           try { result=resolveAnswer(latest,response); }
           catch(error){
@@ -556,8 +557,7 @@ function createNextVideo(env, options) {
           }
           if(!fromAI&&!cache.has(q.key)){if(cache.size>=100)cache.delete(cache.keys().next().value);cache.set(q.key,response);}
           t.letters=result.letters;t.ai=result.ai;
-          if(selected(latest).some(letter=>!result.letters.includes(letter)))return halt('已有选择与题库答案不一致，请手动核对');
-          t.phase='filling';t.confirmed=selected(latest);t.pendingLetter=null;
+          t.phase='filling';t.confirmed=selected(latest);t.pendingSelection=null;
           t.deadline=now()+config.submitTimeoutMs;
           say((fromAI?'官方 AI 答案 ':'已匹配答案 ')+result.letters.join('、')+'，准备逐项选择');
         }).catch(error=>{if(task===t)halt(error?.message || '题库查询失败，请手动回答或重试');});
@@ -580,7 +580,7 @@ function createNextVideo(env, options) {
     style.textContent=':host{font:13px/1.6 system-ui,sans-serif;color:#173540}*{box-sizing:border-box}[hidden]{display:none!important}.box{padding:12px;background:#f5fffc;border:1px solid #8ab9a8;border-radius:9px;box-shadow:0 3px 14px #0002;max-height:calc(100vh - 32px);overflow:auto}header{display:flex;justify-content:space-between;align-items:center;gap:8px}h4{margin:0}button,select{padding:4px 7px;margin:5px 4px 0 0;background:white;border:1px solid #89a99e;border-radius:5px;color:inherit;cursor:pointer}header button{margin:0}input{width:100%;margin-top:7px;padding:7px;border:1px solid #aaa;border-radius:4px}small{display:block;color:#51675e}.status{margin:6px 0;overflow-wrap:anywhere}.row{margin-top:7px;padding-top:6px;border-top:1px solid #d6e8e0}label{margin-right:7px}';
     const make=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
     const box=make('section');box.className='box';
-    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.1'),fold=make('button','收起');
+    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.2'),fold=make('button','收起');
     fold.type='button';header.append(title,fold);
     const body=make('div');
     fold.onclick=()=>{body.hidden=!body.hidden;fold.textContent=body.hidden?'展开':'收起';};
@@ -623,7 +623,7 @@ function createNextVideo(env, options) {
     questionApp=questionApi.createApp({window,document,transport:questionApi.createTransport(GM_xmlhttpRequest),
       getToken:()=>GM_getValue('enncy-token',''),saveToken:value=>GM_setValue('enncy-token',value),onStatus:panel.setQuiz},{ui:false});
     const dispose=()=>{videoApp.stop();questionApp.stop();panel.destroy();window.removeEventListener('pagehide',dispose);};
-    window[slot]={version:'1.5.1',dispose};window.addEventListener('pagehide',dispose);
+    window[slot]={version:'1.5.2',dispose};window.addEventListener('pagehide',dispose);
     videoApp.start();questionApp.start();
   }
 
