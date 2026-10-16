@@ -37,3 +37,27 @@ test('transport serializes official local-only switch and allows longer AI timeo
  let details;const transport=createTransport(d=>(details=d,{abort(){}}));
  for(const localOnly of [true,false]){const p=transport({title:'测试',type:'single',options:[{text:'A'},{text:'B'}]},'TEST',{localOnly});assert.equal(JSON.parse(details.data).__local_only__,localOnly);assert.equal(details.timeout,localOnly?20000:120000);details.onload({status:200,response:{code:0}});await p;}
 });
+
+async function failAI(s){s.requests.at(-1).resolve(reply('未命中','A'));await flush();s.requests.at(-1).resolve(reply('仍未命中','A',false));await flush();}
+async function waitRequery(s){for(let i=0;i<10;i++)await s.tick();}
+test('missing AI result rereads and requeries current question once, then fills and submits',async()=>{
+ const s=setup();await failAI(s);assert.equal(s.app.getState().phase,'requery');assert.equal(s.requests.length,2);
+ s.q.title='重新读取的题干';await waitRequery(s);assert.equal(s.requests.length,3);assert.deepEqual(s.requests[2].options,{localOnly:true});
+ s.requests[2].resolve(reply(s.q.title,'AC'));await flush();for(let i=0;i<6;i++)await s.tick();assert.equal(s.submits(),1);assert.deepEqual(s.q.options.filter(o=>o.input.checked).map(o=>o.letter),['A','C']);s.app.stop();
+});
+test('a requery miss still uses official AI and submits its mapped answer',async()=>{
+ const s=setup();await failAI(s);await waitRequery(s);s.requests[2].resolve(reply('未命中','B'));await flush();assert.equal(s.requests.length,4);
+ s.requests[3].resolve(reply('AI重述','BC',true));await flush();for(let i=0;i<6;i++)await s.tick();assert.equal(s.submits(),1);s.app.stop();
+});
+test('repeated missing AI results stop after one automatic retry without filling',async()=>{
+ const s=setup();await failAI(s);await waitRequery(s);await failAI(s);for(let i=0;i<40;i++)await s.tick();assert.equal(s.requests.length,4);assert.equal(s.submits(),0);assert.equal(s.q.options.some(o=>o.input.checked),false);assert.match(s.app.getState().status,/仍未取得官方 AI/);s.app.stop();
+});
+test('a disappeared question clears stale AI error and cancels its pending requery',async()=>{
+ const s=setup();await failAI(s);s.setActive(null);await waitRequery(s);assert.equal(s.requests.length,2);assert.equal(s.app.getState().phase,null);assert.match(s.app.getState().status,/当前没有可识别题目/);s.app.stop();
+});
+test('manual selection, pause, and background prevent automatic requery',async()=>{
+ for(const mode of ['manual','pause','hidden']){const s=setup();await failAI(s);if(mode==='manual')s.q.options[0].input.checked=true;if(mode==='pause')s.app.setEnabled(false);if(mode==='hidden')s.doc.hidden=true;await waitRequery(s);assert.equal(s.requests.length,2);assert.equal(s.submits(),0);s.app.stop();}
+});
+test('a changed question starts a fresh lookup and does not fill from the old retry',async()=>{
+ const s=setup();await failAI(s);const next={...s.q,key:'new',root:{},title:'下一道题'};s.setActive(next);await waitRequery(s);assert.equal(s.requests.length,3);s.requests[2].resolve(reply(next.title,'B'));await flush();for(let i=0;i<6;i++)await s.tick();assert.equal(s.submits(),1);s.app.stop();
+});

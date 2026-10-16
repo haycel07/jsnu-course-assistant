@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         江苏师大实验室课程：言溪题库自动答题 + 视频自动下一节
 // @namespace    local.jsnu.question-bank
-// @version      1.5.4
+// @version      1.5.5
 // @description  左上角统一面板，可选倍速、视频习题与题库试卷逐题作答、末题提交。
 // @match        http://lsoetp.jsnu.edu.cn/students/*
 // @match        https://lsoetp.jsnu.edu.cn/students/*
@@ -435,7 +435,7 @@ function createNextVideo(env, options) {
     const read = env.readQuestion || (() => readQuestion(doc));
     let running = false, enabled = true, timer = null, task = null, lastKey = null, handled = false;
     let status = '', host, statusNode, pauseButton, tokenInput, tokenHint;
-    let lastRequestAt = -Infinity;
+    let lastRequestAt = -Infinity, autoRetryCount = 0;
     const cache = new Map();
     function say(message) { status = message; if (statusNode) statusNode.textContent = message; env.onStatus?.(message); }
     function cancel() { const old = task; task = null; old?.query?.abort?.(); }
@@ -446,7 +446,7 @@ function createNextVideo(env, options) {
       return q && !q.error && q.key === t.key && q.root === t.root ? q : null;
     }
     function halt(message) { cancel(); say(message); }
-    function retry() { cancel(); handled = false; cache.delete(lastKey); say('已准备重试当前题目'); }
+    function retry() { cancel(); handled = false; autoRetryCount = 0; cache.delete(lastKey); say('已准备重试当前题目'); }
     function setEnabled(value) { enabled = value; cancel(); handled = false; say(value ? '已启用，等待视频习题' : '自动答题已暂停'); }
     function mount() {}
 
@@ -457,13 +457,23 @@ function createNextVideo(env, options) {
       const q=read();
       if (!q) {
         if(task?.phase==='submitted') say(task.mode==='paper'?'试卷区域已关闭，请核对网站提交结果':'习题弹窗已关闭，等待下一道题（正确性以网站结果为准）');
-        cancel();lastKey=null;handled=false;return;
+        else if(enabled&&(lastKey!==null||task))say('当前没有可识别题目，等待下一道题');
+        cancel();lastKey=null;handled=false;autoRetryCount=0;return;
       }
       if(q.error){cancel();lastKey=null;handled=false;say(q.error);return;}
-      if(q.key!==lastKey){cancel();lastKey=q.key;handled=false;}
+      if(q.key!==lastKey){cancel();lastKey=q.key;handled=false;autoRetryCount=0;}
       if(!enabled)return;
       if(task){
         if(!current(task))return halt('题目已变化，旧结果已取消');
+
+        if(task.phase==='requery'){
+          if(doc.hidden)return;
+          if(JSON.stringify(selected(q))!==JSON.stringify(task.initialSelection))return halt('检测到手动选择，未覆盖你的答案');
+          if(now()<task.readyAt)return;
+          cache.delete(q.key);cancel();handled=false;
+          say('正在重新识别当前题目并重新查询');
+          return;
+        }
 
         if(task.phase==='confirming'){
           if(now()>=task.deadline)return halt('未找到明确的交卷确认框，请手动检查；不会重复提交');
@@ -561,7 +571,7 @@ function createNextVideo(env, options) {
             latest=current(t);if(!latest)return;
             if(doc.hidden)return halt('页面在后台，AI 结果未填入；返回后可重试');
             if(JSON.stringify(selected(latest))!==JSON.stringify(t.initialSelection))return halt('检测到手动选择，未覆盖你的答案');
-            if(aiResponse?.data?.ai!==true)throw new Error('未取得官方 AI 结果：请在言溪个人中心开启 AI 并将搜索模式设为“强制 AI”；不会采用不匹配的普通题库答案');
+            if(aiResponse?.data?.ai!==true)throw Object.assign(new Error('未取得官方 AI 结果'),{code:'AI_UNAVAILABLE'});
             result=resolveAnswer(latest,aiResponse,{fromAI:true});fromAI=true;
           }
           if(!fromAI&&!cache.has(q.key)){if(cache.size>=100)cache.delete(cache.keys().next().value);cache.set(q.key,response);}
@@ -569,7 +579,15 @@ function createNextVideo(env, options) {
           t.phase='filling';t.confirmed=selected(latest);t.pendingSelection=null;
           t.deadline=now()+config.submitTimeoutMs;
           say((fromAI?'官方 AI 答案 ':'已匹配答案 ')+result.letters.join('、')+'，准备逐项选择');
-        }).catch(error=>{if(task===t)halt(error?.message || '题库查询失败，请手动回答或重试');});
+        }).catch(error=>{
+          if(task!==t)return;
+          if(error?.code==='AI_UNAVAILABLE'&&current(t)&&autoRetryCount<1){
+            autoRetryCount++;cache.delete(t.key);t.phase='requery';t.readyAt=now()+3000;
+            say('未取得官方 AI 结果，3 秒后重新识别并查询本题（自动重试 1/1）');
+            return;
+          }
+          halt(error?.code==='AI_UNAVAILABLE'?'重新识别查询后仍未取得官方 AI 结果，请检查言溪 AI 设置或额度；可点击重试本题':error?.message || '题库查询失败，请手动回答或重试');
+        });
       }catch(_){halt('题库请求无法启动，请检查配置');}
     }
     function start(){if(running)return;running=true;win.addEventListener('pagehide',stop);timer=win.setInterval(step,config.pollMs);say('等待视频习题');step();}
@@ -589,7 +607,7 @@ function createNextVideo(env, options) {
     style.textContent=':host{font:13px/1.6 system-ui,sans-serif;color:#173540}*{box-sizing:border-box}[hidden]{display:none!important}.box{padding:12px;background:#f5fffc;border:1px solid #8ab9a8;border-radius:9px;box-shadow:0 3px 14px #0002;max-height:calc(100vh - 32px);overflow:auto}header{display:flex;justify-content:space-between;align-items:center;gap:8px}h4{margin:0}button,select{padding:4px 7px;margin:5px 4px 0 0;background:white;border:1px solid #89a99e;border-radius:5px;color:inherit;cursor:pointer}header button{margin:0}input{width:100%;margin-top:7px;padding:7px;border:1px solid #aaa;border-radius:4px}small{display:block;color:#51675e}.status{margin:6px 0;overflow-wrap:anywhere}.row{margin-top:7px;padding-top:6px;border-top:1px solid #d6e8e0}label{margin-right:7px}';
     const make=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
     const box=make('section');box.className='box';
-    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.4'),fold=make('button','收起');
+    const header=make('header'),title=make('h4','江苏师大课程助手 v1.5.5'),fold=make('button','收起');
     fold.type='button';header.append(title,fold);
     const body=make('div');
     fold.onclick=()=>{body.hidden=!body.hidden;fold.textContent=body.hidden?'展开':'收起';};
@@ -632,7 +650,7 @@ function createNextVideo(env, options) {
     questionApp=questionApi.createApp({window,document,transport:questionApi.createTransport(GM_xmlhttpRequest),
       getToken:()=>GM_getValue('enncy-token',''),saveToken:value=>GM_setValue('enncy-token',value),onStatus:panel.setQuiz},{ui:false});
     const dispose=()=>{videoApp.stop();questionApp.stop();panel.destroy();window.removeEventListener('pagehide',dispose);};
-    window[slot]={version:'1.5.4',dispose};window.addEventListener('pagehide',dispose);
+    window[slot]={version:'1.5.5',dispose};window.addEventListener('pagehide',dispose);
     videoApp.start();questionApp.start();
   }
 
